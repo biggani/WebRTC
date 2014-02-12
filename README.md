@@ -334,7 +334,16 @@ DataChannels can be attached to a PeerConnection by using the following `XSocket
 
      var dc = new XSockets.WebRTC.DataChannel("chat");
      
-     // do op
+     // Note you will need to add your DataChannel by calling addDataChannel(dc)
+     
+     rtc.addDataChannel(dc);
+     
+     // any event binding (open,close) or subscriptions needs to be tone prior to adding the channel
+     
+     
+     
+     
+     
      
 
 ###DataChannel events
@@ -432,25 +441,3 @@ Not yet documented fully documented.  The main purpose is to be able to detect o
 
 
 ...
-
-
-..
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-     
-     
