@@ -1,30 +1,92 @@
-﻿var RTCPeerConnection = null;
+﻿String.prototype.capitalize = function () {
+    return this.replace(/(^|\s)([a-z])/g, function (m, p1, p2) {
+        return p1 + p2.toUpperCase();
+    });
+};
+
+var RTCPeerConnection = null;
 var getUserMedia = null;
 var attachMediaStream = null;
 var reattachMediaStream = null;
 var webrtcDetectedBrowser = null;
+var webrtcDetectedVersion = null;
+
+function trace(text) {
+    // This function is used for logging.
+    if (text[text.length - 1] == '\n') {
+        text = text.substring(0, text.length - 1);
+    }
+    console.log((performance.now() / 1000).toFixed(3) + ": " + text);
+}
 
 if (navigator.mozGetUserMedia) {
-    // thanx Adam Barth.
+    console.log("This appears to be Firefox");
+
     webrtcDetectedBrowser = "firefox";
+
+    webrtcDetectedVersion =
+             parseInt(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
+
+    // The RTCPeerConnection object.
     RTCPeerConnection = mozRTCPeerConnection;
+
+    // The RTCSessionDescription object.
     RTCSessionDescription = mozRTCSessionDescription;
 
+    // The RTCIceCandidate object.
     RTCIceCandidate = mozRTCIceCandidate;
 
-
+    // Get UserMedia (only difference is the prefix).
+    // Code from Adam Barth.
     getUserMedia = navigator.mozGetUserMedia.bind(navigator);
 
+    // Creates iceServer from the url for FF.
+    createIceServer = function (url, username, password) {
+        var iceServer = null;
+        var url_parts = url.split(':');
+        if (url_parts[0].indexOf('stun') === 0) {
+            // Create iceServer with stun url.
+            iceServer = { 'url': url };
+        } else if (url_parts[0].indexOf('turn') === 0) {
+            if (webrtcDetectedVersion < 27) {
+                // Create iceServer with turn url.
+                // Ignore the transport parameter from TURN url for FF version <=27.
+                var turn_url_parts = url.split("?");
+                // Return null for createIceServer if transport=tcp.
+                if (turn_url_parts[1].indexOf('transport=udp') === 0) {
+                    iceServer = {
+                        'url': turn_url_parts[0],
+                        'credential': password,
+                        'username': username
+                    };
+                }
+            } else {
+                // FF 27 and above supports transport parameters in TURN url,
+                // So passing in the full url to create iceServer.
+                iceServer = {
+                    'url': url,
+                    'credential': password,
+                    'username': username
+                };
+            }
+        }
+        return iceServer;
+    };
+
+    // Attach a media stream to an element.
     attachMediaStream = function (element, stream) {
+        console.log("Attaching media stream");
         element.mozSrcObject = stream;
         element.play();
     };
 
     reattachMediaStream = function (to, from) {
+        console.log("Reattaching media stream");
         to.mozSrcObject = from.mozSrcObject;
         to.play();
     };
 
+    // Fake get{Video,Audio}Tracks
     MediaStream.prototype.getVideoTracks = function () {
         return [];
     };
@@ -33,158 +95,195 @@ if (navigator.mozGetUserMedia) {
         return [];
     };
 } else if (navigator.webkitGetUserMedia) {
+    console.log("This appears to be Chrome");
+
     webrtcDetectedBrowser = "chrome";
+    webrtcDetectedVersion =
+           parseInt(navigator.userAgent.match(/Chrom(e|ium)\/([0-9]+)\./)[2], 10);
 
+    // Creates iceServer from the url for Chrome.
+    createIceServer = function (url, username, password) {
+        var iceServer = null;
+        var url_parts = url.split(':');
+        if (url_parts[0].indexOf('stun') === 0) {
+            // Create iceServer with stun url.
+            iceServer = { 'url': url };
+        } else if (url_parts[0].indexOf('turn') === 0) {
+            // Chrome M28 & above uses below TURN format.
+            iceServer = {
+                'url': url,
+                'credential': password,
+                'username': username
+            };
+        }
+        return iceServer;
+    };
+
+    // The RTCPeerConnection object.
     RTCPeerConnection = webkitRTCPeerConnection;
-    getUserMedia = navigator.webkitGetUserMedia.bind(navigator);
-    attachMediaStream = function (element, stream) {
 
-        element.src = webkitURL.createObjectURL(stream);
+    // Get UserMedia (only difference is the prefix).
+    // Code from Adam Barth.
+    getUserMedia = navigator.webkitGetUserMedia.bind(navigator);
+
+    // Attach a media stream to an element.
+    attachMediaStream = function (element, stream) {
+        if (typeof element.srcObject !== 'undefined') {
+            element.srcObject = stream;
+        } else if (typeof element.mozSrcObject !== 'undefined') {
+            element.mozSrcObject = stream;
+        } else if (typeof element.src !== 'undefined') {
+            element.src = URL.createObjectURL(stream);
+        } else {
+            console.log('Error attaching stream to element.');
+        }
     };
 
     reattachMediaStream = function (to, from) {
         to.src = from.src;
     };
-    if (!webkitMediaStream.prototype.getVideoTracks) {
-        webkitMediaStream.prototype.getVideoTracks = function () {
-            return this.videoTracks;
-        };
-        webkitMediaStream.prototype.getAudioTracks = function () {
-            return this.audioTracks;
-        };
-    }
-    if (!webkitRTCPeerConnection.prototype.getLocalStreams) {
-        webkitRTCPeerConnection.prototype.getLocalStreams = function () {
-            return this.localStreams;
-        };
-        webkitRTCPeerConnection.prototype.getRemoteStreams = function () {
-            return this.remoteStreams;
-        };
-    }
 } else {
-
+    console.log("Browser does not appear to be WebRTC-capable");
 }
+
+window.requestAnimFrame = (function () {
+    return window.requestAnimationFrame ||
+            window.webkitRequestAnimationFrame ||
+            window.mozRequestAnimationFrame ||
+            function (callback) {
+                window.setTimeout(callback, 1000 / 60);
+            };
+})();
 
 XSockets.PeerContext = function (guid, context) {
     this.PeerId = guid;
     this.Context = context;
 };
 
-XSockets.WebRTC = function (ws, settings) {
 
+XSockets.AudioAnalyser = (function () {
+    function AudioAnalyser(stream, interval, cb) {
+        var self = this;
+        var buflen = 2048;
+        var buf = new Uint8Array(buflen);
+        function autoCorrelate(buf, sampleRate) {
+            var minSamples = 4;
+            var maxSamples = 1000;
+            var size = 1000;
+            var bestOffset = -1;
+            var bestCorrelation = 0;
+            var rms = 0;
+            var currentPitch = 0;
+            if (buf.length < (size + maxSamples - minSamples))
+                return;  // Not enough data
+            for (var i = 0; i < size; i++) {
+                var val = (buf[i] - 128) / 128;
+                rms += val * val;
+            }
+            rms = Math.sqrt(rms / size);
+            for (var offset = minSamples; offset <= maxSamples; offset++) {
+                var correlation = 0;
+                for (var i = 0; i < size; i++) {
+                    correlation += Math.abs(((buf[i] - 128) / 128) - ((buf[i + offset] - 128) / 128));
+                }
+                correlation = 1 - (correlation / size);
+                if (correlation > bestCorrelation) {
+                    bestCorrelation = correlation;
+                    bestOffset = offset;
+                }
+            }
+            if ((rms > 0.01) && (bestCorrelation > 0.01)) {
+                currentPitch = sampleRate / bestOffset;
+                var result = {
+                    Confidence: bestCorrelation,
+                    CurrentPitch: currentPitch,
+                    Fequency: sampleRate / bestOffset,
+                    RMS: rms,
+                    TimeStamp: new Date()
+                };
+                if (self.onResult)
+                    self.onResult(result);
+                self.analyzerResult.unshift(result);
+            }
+        }
+        function pitcher() {
+            self.analyser.getByteTimeDomainData(buf);
+            autoCorrelate(buf, self.audioContext.sampleRate);
+        }
+        this.analyzerResult = [];
+        this.isSpeaking = false;
+        this.onResult = undefined;
+        this.onAnalysis = undefined;
+        this.audioContext = new AudioContext();
+        var mediaStreamSource = this.audioContext.createMediaStreamSource(stream);
+        this.analyser = this.audioContext.createAnalyser();
+
+        mediaStreamSource.connect(this.analyser);
+        this.analyser.smoothingTimeConstant = 0.8;
+        this.analyser.fftSize = 2048;
+
+        window.setInterval(function () {
+            pitcher();
+        }, (interval || 1000) / 10);
+
+        setInterval(function () {
+            if (self.analyzerResult.length > 5) {
+                // How old is the latest confident audio analyze?
+                var now = new Date();
+                var result = self.analyzerResult[0];
+                var lastKnown = new Date(self.analyzerResult[0].TimeStamp.getTime());
+                if ((now - lastKnown) > 1000) {
+                    if (self.isSpeaking) {
+                        result.IsSpeaking = false;
+                        if (self.onAnalysis) self.onAnalysis(result);
+                        self.analyzerResult = [];
+                    }
+                    self.isSpeaking = false;
+                } else {
+                    if (!self.isSpeaking) {
+                        result.IsSpeaking = true;
+                        if (self.onAnalysis) self.onAnalysis(result);
+                    }
+                    self.isSpeaking = true;
+                }
+            }
+        }, 250);
+        if (cb) cb();
+    }
+    return AudioAnalyser;
+
+})();
+
+XSockets.WebRTC = function (ws, settings) {
+    var isAudioMuted = false;
     var self = this;
     var localStreams = [];
+    var subscriptions = new XSockets.Subscriptions();
     this.PeerConnections = {};
-    this.DataChannels = {};
-
+    this.DataChannels = undefined;
     var defaults = {
-        RTCConfiguration: {
-            "iceServers": [{
-                "url": "stun:stun.l.google.com:19302"
-            }]
-        },
-        MediaConstraints: {
+        iceServers: [{
+            "url": "stun:stun.l.google.com:19302"
+        }]
+        ,
+        sdpConstraints: {
+            optional: [],
             mandatory: {
                 OfferToReceiveAudio: true,
                 OfferToReceiveVideo: true
-            },
-            optional: [{
-                RtpDataChannels: true
-            }]
+            }
+        },
+        streamConstraints: {
+            mandatory: {},
+            optional: []
         },
         sdpExpressions: []
     };
 
 
-    var options = XSockets.Utils.extend(defaults, settings);
 
 
-
-    var Subscriptions = (function () {
-        var subscriptions = [];
-        this.add = function (name, fn, opt) {
-            name = name.toLowerCase();
-            var storedSub = this.get(name);
-            if (storedSub === null) {
-                var sub = new subscription(name);
-                sub.addCallback(fn, opt);
-                subscriptions.push(sub);
-                return 1;
-            }
-            storedSub.addCallback(fn, opt);
-            return storedSub.Callbacks.length;
-        };
-        this.get = function (name) {
-            name = name.toLowerCase();
-            for (var i = 0; i < subscriptions.length; i++) {
-                if (subscriptions[i].Name === name) return subscriptions[i];
-            }
-            return null;
-        };
-        this.getAll = function () {
-            return subscriptions;
-        };
-        this.remove = function (name, ix) {
-            name = name.toLowerCase();
-            for (var i = 0; i < subscriptions.length; i++) {
-                if (subscriptions[i].Name === name) {
-                    if (ix === undefined) {
-                        subscriptions.splice(i, 1);
-                    } else {
-                        subscriptions[i].Callbacks.splice(ix - 1, 1);
-                        if (subscriptions[i].Callbacks.length === 0) subscriptions.splice(i, 1);
-                    }
-                    return true;
-                }
-            }
-            return false;
-        };
-        this.fire = function (name, message, cb, ix) {
-            name = name.toLowerCase();
-            for (var i = 0; i < subscriptions.length; i++) {
-                if (subscriptions[i].Name === name) {
-                    if (ix === undefined) {
-                        subscriptions[i].fireCallbacks(message, cb);
-                    } else {
-                        subscriptions[i].fireCallback(message, cb, ix);
-                    }
-                }
-            }
-        };
-        var subscription = function (name) {
-            this.Name = name;
-            this.Callbacks = [];
-            this.addCallback = function (fn, opt) {
-                this.Callbacks.push(new callback(fn, opt));
-            };
-            this.fireCallback = function (message, cb, ix) {
-                this.Callbacks[ix - 1].fn(message);
-                if (typeof (this.Callbacks[ix - 1].state) === "object") {
-                    if (typeof (this.Callbacks[ix - 1].state.options) !== "undefined" && typeof (this.Callbacks[ix - 1].state.options.counter) !== "undefined") {
-                        this.Callbacks[ix - 1].state.options.counter.messages--;
-                        if (this.Callbacks[ix - 1].state.options.counter.messages === 0) {
-                            if (typeof (this.Callbacks[ix - 1].state.options.counter.completed) === 'function') {
-                                this.Callbacks[ix - 1].state.options.counter.completed();
-                            }
-                        }
-                    }
-                }
-                if (cb && typeof (cb) === "function") {
-                    cb();
-                }
-            };
-            this.fireCallbacks = function (message, cb) {
-                for (var c = 0; c < this.Callbacks.length; c++) {
-                    this.fireCallback(message, cb, c + 1);
-                }
-            };
-        };
-        var callback = function (func, opt) {
-            this.fn = func;
-            this.state = opt;
-        };
-        return this;
-    });
+    var options = XSockets.Utils.extend(defaults, settings);;
 
 
     this.bind = function (event, fn, opts, callback) {
@@ -202,6 +301,11 @@ XSockets.WebRTC = function (ws, settings) {
         return this;
     };
     this.dispatch = function (eventName, message, obj) {
+        var _eventName = "on" + eventName;
+        
+        if (this.hasOwnProperty(_eventName)) {
+            self[_eventName](message);
+        }
         if (subscriptions.get(eventName) === null) {
             return;
         }
@@ -210,30 +314,9 @@ XSockets.WebRTC = function (ws, settings) {
         }
         subscriptions.fire(eventName, message, function () { });
     };
-    this.channelPublish = function (event, json) {
-        for (var c in self.DataChannels) {
-            var channel = self.DataChannels[c];
-            if (channel.readyState === "open") {
-                var message = new XSockets.Message(event, json);
-                channel.send(JSON.stringify(message));
-            }
-        }
-        return this;
-    };
-    this.closeChannel = function (id) {
-        self.DataChannels[id].close();
-        return this;
-    };
-    this.channelSubscribe = function (event, peer, callback) {
-        self.bind(peer + event, callback);
-        return this;
-    };
-    this.channelUnsubscribe = function (event, peer, callback) {
-        self.unbind(peer + event, callback);
-        return this;
-    };
 
-    var isAudioMuted = false;
+
+
     this.muteAudio = function (cb) {
         /// <summary>Toggle mute on all local streams</summary>
         /// <param name="cb" type="Object">function to be invoked when toggled</param>
@@ -280,24 +363,26 @@ XSockets.WebRTC = function (ws, settings) {
     };
 
 
+
+
     this.getLocalStreams = function () {
         /// <summary>Get local streams</summary>
         return localStreams;
     };
-
     this.removeStream = function (id, fn) {
         /// <summary>Remove the specified local stream</summary>
         /// <param name="id" type="Object">Id of the media stream</param>
         /// <param name="fn" type="Object">callback function invoked when remote peers notified and stream removed.</param>
         localStreams.forEach(function (stream, index) {
             if (stream.id === id) {
+
                 localStreams[index].stop();
+                localStreams.splice(index, 1);
                 for (var peer in self.PeerConnections) {
-                    self.PeerConnections[peer].Connection.removeStream(localStreams[index]);
-                    localStreams.splice(index, 1);
-                    createOffer({
-                        PeerId: peer
-                    });
+                    //  self.PeerConnections[peer].Connection.removeStream(_stream);
+                    //createOffer({
+                    //    PeerId: peer
+                    //});
                     ws.publish("removestream", {
                         recipient: peer,
                         streamId: id
@@ -384,6 +469,7 @@ XSockets.WebRTC = function (ws, settings) {
         createOffer({
             PeerId: id
         });
+
         if (fn) fn(id);
     };
 
@@ -403,26 +489,32 @@ XSockets.WebRTC = function (ws, settings) {
         /// <summary>Remove the specified Peerconnection</summary>
         /// <param name="id" type="guid">Id of the PeerConnection. Id is the PeerId of the actual PeerConnection</param>
         /// <param name="fn" type="function">callback function invoked when the PeerConnection is removed</param>
-        ws.publish("peerconnectiondisconnect", {
-            Recipient: id,
-            Sender: self.CurrentContext.PeerId
-        });
+        //ws.publish("peerconnectiondisconnect", {
+        //    Recipient: id,
+        //    Sender: self.CurrentContext.PeerId
+        //});
         if (self.PeerConnections[id] !== undefined) {
-            self.PeerConnections[id].Connection.close();
-            self.dispatch(XSockets.WebRTC.Events.onPeerConnectionLost, {
-                PeerId: id
-            });
+            try {
+                self.PeerConnections[id].Connection.close();
+                self.dispatch(XSockets.WebRTC.Events.onPeerConnectionLost, {
+                    PeerId: id
+                });
+            } catch (err) {
+
+            }
+
         };
         delete self.PeerConnections[id];
         if (fn) fn();
     };
 
-    this.getUserMedia = function (userMediaSettings, success, error) {
+    this.getUserMedia = function (constraints, success, error) {
+
         /// <summary>get a media stream</summary>
-        /// <param name="userMediaSettings" type="Object">connstraints. i.e .userMediaConstraints.hd()</param>
+        /// <param name="userMediaSettings" type="Object">connstraints. i.e .usersdpConstraints.hd()</param>
         /// <param name="success" type="Object">callback function invoked when media stream captured</param>
         /// <param name="error" type="Object">callback function invoked on faild to get the media stream </param>
-        window.getUserMedia(userMediaSettings, function (stream) {
+        window.getUserMedia(constraints, function (stream) {
             localStreams.push(stream);
             ws.trigger("AddStream", {
                 streamId: stream.id,
@@ -436,43 +528,87 @@ XSockets.WebRTC = function (ws, settings) {
         return this;
     };
 
-    // private
+    // DataChannels
 
-    var subscriptions = new Subscriptions();
+    this.addDataChannel = function (dc) {
+        /// <summary>Add a XSockets.WebRTC.DataChannel. Channel will be offered to remote peers</summary>
+        /// <param name="dc" type="Object">XSockets.WebRTC.DataChannel to add</param>
+        /// <param name="success" type="Object">callback function invoked when added.</param>
+        this.DataChannels = this.DataChannels || {};
+        if (!this.DataChannels.hasOwnProperty(dc.name)) {
+            this.DataChannels[dc.name] = dc;
+        } else {
+            throw "A RTCDataChannel named '" + dc.Name + "' already exists and cannot be created.";
+        }
+
+
+
+    };
+    this.removeDataChannel = function (name, cb) {
+        /// <summary>Remove a Sockets.WebRTC.DataChannel </summary>
+        /// <param name="name" type="Object">name of the XSockets.WebRTC.DataChannel to remove from offers</param>
+        /// <param name="success" type="Object">callback function invoked when removed</param>
+
+        if (this.DataChannels.hasOwnProperty(name)) {
+            delete this.DataChannels[name];
+            // remove delegates from peers..
+            for (var pc in this.PeerConnections) {
+                this.PeerConnections[pc].RTCDataChannels[name].close();
+                delete this.PeerConnections[pc].RTCDataChannels[name];
+            }
+        } else {
+            throw "A RTCDataChannel named '" + name + "' does not exists.";
+        }
+    };
+
+
+    // Private methods
     var rtcPeerConnection = function (configuration, peerId) {
+       
         var that = this;
         this.PeerId = peerId;
-        this.Connection = new RTCPeerConnection(
-            configuration.RTCConfiguration,
-            configuration.MediaConstraints);
-        this.Connection.onconnection = function () { };
-        try {
-            self.DataChannels[peerId] = this.Connection.createDataChannel('RTCDataChannel', {
-                reliable: false
-            });
-            self.DataChannels[peerId].onmessage = function (event) {
-                var message = JSON.parse(event.data).JSON;
-                self.dispatch(that.PeerId + message.event, message.data, that.PeerId);
+        this.RTCDataChannels = {};
+        if (typeof (self.DataChannels) === "object" && configuration.sdpConstraints.optional.filter(function (option) { return option.RtpDataChannels; }).length === 0) {
+            configuration.sdpConstraints.optional.push({ RtpDataChannels: true });
+        }
+        this.Connection = new RTCPeerConnection({ iceServers: configuration.iceServers }, configuration.sdpConstraints);
+        this.Connection.oniceconnectionstatechange = function (data) {
+            //   console.log("oniceconnectionstatechange", data);
+        };
+        this.Connection.onnegotiationneeded = function (data) {
+            // console.log("onnegotiationneeded", data);
+        };
+        this.Connection.onremovestream = function (data) {
+            //console.log("onremovestream", data);
+        };
+        this.Connection.onsignalingstatechange = function (data) {
+            //console.log("onsignalingstatechange", data);
+        };
+        // If there is dataChannels attach, offer em
+        for (var dc in self.DataChannels) {
+            var dataChannel = self.DataChannels[dc];
+            this.RTCDataChannels[dataChannel.name] = this.Connection.createDataChannel(dataChannel.name, { reliable: false });
+            this.RTCDataChannels[dataChannel.name].onmessage = function (data) {
+                var obj = JSON.parse(data.data).JSON;
+                dataChannel.subscriptions.fire(obj.event, { peerId: that.PeerId, message: JSON.parse(obj.data) }, function () { });
             };
-            self.DataChannels[peerId].onopen = function () {
-                self.dispatch(XSockets.WebRTC.Events.onDataChannelOpen, {
-                    PeerId: self.DataChannels[peerId]
-                });
+            this.RTCDataChannels[dataChannel.name].onopen = function (event) {
+                //console.log("dataChannel open ", dataChannel.name, data);
+                if (dataChannel.onopen) dataChannel.onopen(that.PeerId, event);
             };
-            self.DataChannels[peerId].onclose = function () {
-                self.dispatch(XSockets.WebRTC.Events.onDataChannelClose, {
-                    PeerId: self.DataChannels[peerId]
-                });
+            this.RTCDataChannels[dataChannel.name].closed = function (event) {
+                if (dataChannel.onclose) dataChannel.onclose(that.PeerId, event);
             };
-        } catch (ex) {
-            console.log("'Create Data channel failed with exception:", ex.message);
+            dataChannel.onpublish = function (topic, data) {
+                var message = new XSockets.Message(topic, data);
+                that.RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
+            };
         }
         this.Connection.onaddstream = function (event) {
             self.dispatch(XSockets.WebRTC.Events.onRemoteStream, {
                 PeerId: that.PeerId,
                 stream: event.stream
             });
-
         };
         this.Connection.onicecandidate = function (event) {
             if (event.candidate) {
@@ -489,38 +625,22 @@ XSockets.WebRTC = function (ws, settings) {
                 });
             }
         };
-        self.dispatch(XSockets.WebRTC.Events.onPeerConnectionCreated, new peerConnection(that.PeerId));
-    };
-    var peerConnection = function (id) {
-        this.PeerId = id;
-        this.publish = function (topic, obj, cb) {
-            for (var c in self.DataChannels) {
-                var channel = self.DataChannels[c];
-                if (channel.readyState === "open") {
-                    var message = new XSockets.Message(event, json);
-                    channel.send(JSON.stringify(message));
-                }
-            }
-            if (typeof (cb) === "function") cb();
-        }
-        this.subscribe = function (topic, cb) {
-            self.bind(this.Id + topic, cb);
-        },
-        this.unsubscribe = function (topic, cb) {
-            self.unbind(this.Id + topic, cb);
-        };
+        self.dispatch(XSockets.WebRTC.Events.onPeerConnectionCreated, { PeerId: that.PeerId });
     };
     var createOffer = function (peer) {
+        if (!peer) return;
 
+        //if (self.PeerConnections[peer.PeerId]) {
         self.PeerConnections[peer.PeerId] = new rtcPeerConnection(options, peer.PeerId);
         localStreams.forEach(function (a, b) {
-            self.PeerConnections[peer.PeerId].Connection.addStream(a);
+
+            self.PeerConnections[peer.PeerId].Connection.addStream(a, options.streamConstraints);
         });
-
-
         self.PeerConnections[peer.PeerId].Connection.createOffer(function (localDescription) {
             options.sdpExpressions.forEach(function (expr, b) {
                 localDescription.sdp = expr(localDescription.sdp);
+            }, function (failue) {
+                console.log(failue);
             });
             self.PeerConnections[peer.PeerId].Connection.setLocalDescription(localDescription);
             ws.publish("contextsignal", {
@@ -528,11 +648,10 @@ XSockets.WebRTC = function (ws, settings) {
                 Recipient: peer.PeerId,
                 Message: JSON.stringify(localDescription)
             });
-        }, null, options.MediaConstraints);
+        }, null, options.sdpConstraints);
+        //}
     };
-
     self.bind("connect", function (peer) {
-
         createOffer(peer);
     });
     self.bind("candidate", function (event) {
@@ -549,38 +668,40 @@ XSockets.WebRTC = function (ws, settings) {
         self.PeerConnections[event.Sender].Connection.setRemoteDescription(new RTCSessionDescription(JSON.parse(event.Message)));
     });
     self.bind("offer", function (event) {
-
         self.dispatch(XSockets.WebRTC.Events.onOffer, {
             PeerId: event.Sender
         });
-
         self.PeerConnections[event.Sender] = new rtcPeerConnection(options, event.Sender);
         self.PeerConnections[event.Sender].Connection.setRemoteDescription(new RTCSessionDescription(JSON.parse(event.Message)));
+
+
+
         localStreams.forEach(function (a, b) {
-            self.PeerConnections[event.Sender].Connection.addStream(a);
+            self.PeerConnections[event.Sender].Connection.addStream(a, options.streamConstraints);
         });
+
         self.PeerConnections[event.Sender].Connection.createAnswer(function (description) {
+
             self.PeerConnections[event.Sender].Connection.setLocalDescription(description);
             options.sdpExpressions.forEach(function (expr, b) {
-                description.sdp = expr(description.sdp);
-            });
 
+                description.sdp = expr(description.sdp);
+            }, function (failure) {
+                // dispatch the error
+            });
             var answer = {
                 Sender: self.CurrentContext.PeerId,
                 Recipient: event.Sender,
                 Message: JSON.stringify(description)
             };
-
-
             ws.publish("contextsignal", answer);
-        }, null, options.MediaConstraints);
+        }, null, options.sdpConstraints);
 
     });
     ws.subscribe("contextcreated", function (context) {
         self.CurrentContext = new XSockets.PeerContext(context.PeerId, context.Context);
         self.dispatch(XSockets.WebRTC.Events.onContextCreated, context);
-        
-    },function() {
+    }, function () {
         ws.publish('GetContext');
     });
     ws.subscribe("contextsignal", function (signal) {
@@ -591,7 +712,6 @@ XSockets.WebRTC = function (ws, settings) {
         self.dispatch(XSockets.WebRTC.Events.onContextChange, change);
     });
     ws.subscribe("contextconnect", function (peers) {
-
         peers.forEach(function (peer) {
             self.dispatch("connect", peer);
             self.dispatch(XSockets.WebRTC.Events.onPeerConnectionStarted, peer);
@@ -616,17 +736,54 @@ XSockets.WebRTC = function (ws, settings) {
         });
     });
     ws.subscribe("peerconnectionlost", function (peer) {
+      
+        self.dispatch(XSockets.WebRTC.Events.onPeerConnectionLost, {
+            PeerId: peer.PeerId
+        });
         if (self.PeerConnections[peer.PeerId] !== undefined) {
             self.PeerConnections[peer.PeerId].Connection.close();
-            self.dispatch(XSockets.WebRTC.Events.onPeerConnectionLost, {
-                PeerId: peer.PeerId
-            });
             delete self.PeerConnections[peer.PeerId];
         };
+
+
     });
+
+
+
+
+
 };
 
-// Call manager  
+
+XSockets.WebRTC.DataChannel = (function () {
+    function DataChannel(name) {
+        var self = this;
+        this.subscriptions = new XSockets.Subscriptions();
+        this.name = name;
+        this.subscribe = function (topic, cb) {
+            self.subscriptions.add(topic, cb);
+        };
+        this.publishBinary = function() {
+            throw "Not yet implemented";
+        };
+        this.publish = function (topic, data, cb) {
+            if (!self.onpublish) return;
+            self.onpublish(topic, data);
+            if (cb) cb(data);
+        };
+        this.unsubscribe = function (topic, cb) {
+            self.subscriptions.remove(topic);
+            if (cb) cb();
+        };
+        this.onbinary = undefined;
+        this.onpublish = undefined;
+        this.onclose = undefined;
+        this.onopen = undefined;
+    }
+    return DataChannel;
+})();
+
+
 XSockets.WebRTC.CallManager = function (ws, settings) {
     var events = settings.events;
     this.call = function (recipient) {
@@ -650,27 +807,19 @@ XSockets.WebRTC.CallManager = function (ws, settings) {
     ws.subscribe("contextdeny", events.onDenyCall);
 };
 
-
-
 XSockets.WebRTC.Events = {
     onlocalStream: "localstream",
     onRemoteStream: "remotestream",
     onRemoteStreamLost: "removestream",
     onLocalStreamCreated: "streamadded",
-
-    onContextChange: "contexchanged", // Fires when the current context changes
+    onContextChange: "contextchanged", // Fires when the current context changes
     onContextCreated: "contextcreated", // Fires when a client recives a new context
-
     onPeerConnectionStarted: "peerconnectionstarted", // Fires when a new RTCPeerConnection is initialized
     onPeerConnectionCreated: "peerconnectioncreated", // Fires when a new RTCPeerConnection is created
     onPeerConnectionLost: "peerconnectionlost", // Fires when a RTCPeerConnection is lost
-
     onDataChannelOpen: "datachannelopen", // Fires when a datachannel is open
     onDataChannelClose: "datachannelclose", // Fires when a datachannes is closed
-
-
-
-    onOffer: 'sdpoffer',
+    onOffer: 'sdoffer',
     onAnswer: 'sdanswer'
 
 };
