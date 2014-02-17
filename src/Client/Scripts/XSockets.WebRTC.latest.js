@@ -601,7 +601,14 @@ XSockets.WebRTC = function (ws, settings) {
             };
             dataChannel.onpublish = function (topic, data) {
                 var message = new XSockets.Message(topic, data);
-                that.RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
+                for (var p in self.PeerConnections) {
+                    self.PeerConnections[p].RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
+                }
+            };
+            dataChannel.onpublishTo = function (peerId,topic, data) {
+                var message = new XSockets.Message(topic, data);
+                if(self.PeerConnections[peerId])
+                    self.PeerConnections[peerId].RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
             };
         }
         this.Connection.onaddstream = function (event) {
@@ -656,6 +663,7 @@ XSockets.WebRTC = function (ws, settings) {
     });
     self.bind("candidate", function (event) {
         var candidate = JSON.parse(event.Message);
+        if (!self.PeerConnections[event.Sender]) return;
         self.PeerConnections[event.Sender].Connection.addIceCandidate(new RTCIceCandidate({
             sdpMLineIndex: candidate.label,
             candidate: candidate.candidate
@@ -763,13 +771,13 @@ XSockets.WebRTC.DataChannel = (function () {
         this.subscribe = function (topic, cb) {
             self.subscriptions.add(topic, cb);
         };
-        this.publishBinary = function() {
-            throw "Not yet implemented";
-        };
         this.publish = function (topic, data, cb) {
             if (!self.onpublish) return;
             self.onpublish(topic, data);
             if (cb) cb(data);
+        };
+        this.publishTo = function(peerId,topic, data, cb) {
+
         };
         this.unsubscribe = function (topic, cb) {
             self.subscriptions.remove(topic);
