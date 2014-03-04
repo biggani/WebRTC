@@ -1,9 +1,13 @@
 
-
-
 #XSockets.NET - WebRTC
 
-This repo contains the full source code of the [XSockets.NET][1]  WebRTC (experiments)
+This repo contains the full source code of the [XSockets.NET][1]  WebRTC 
+
+###Demo
+
+We dropped a simple example (index.htm) that gives you a very simple "video conference". The demo allows 1-n clients to connect and share MediaStreems.
+
+http://xsockets.github.io/WebRTC/
 
 ##Pre-Req
 
