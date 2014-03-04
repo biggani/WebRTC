@@ -1,0 +1,92 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>XSockets.NET WebRTC Example | Simple video conference using WebRTC</title>
+    <script src="//code.jquery.com/jquery-1.11.0.min.js"></script>
+    <script src="//xsockets.github.io/XSockets.JavaScript.API/src/XSockets.latest.min.js"></script>
+    <script src="//xsockets.github.io/WebRTC/src/Client/Scripts/XSockets.WebRTC.latest.min.js"></script>
+    <style>
+        body {
+            font-family: "Helvetica Neue",Helvetica,Arial,sans-serif;
+            font-size: 14px;
+            line-height: 1.42857143;
+            color: #333;
+            background-color: #fff;
+        }
+
+        #remote {
+            background: #fafafa;
+            border-top: 1px solid #dadada;
+            border-bottom: 1px solid #dadada;
+            min-height: 340px;
+            padding: 10px;
+        }
+
+            #remote video {
+                max-width: 320px;
+                float: left;
+                margin-right: 10px;
+            }
+
+        span {
+            float: right;
+        }
+
+        #local {
+            position: absolute;
+            right: 10px;
+            bottom: 10px;
+        }
+    </style>
+    <script>
+        var ws, rtc;
+        var myCtx = "1265343559964af892b7ba86205e5927";
+        $(function () {
+            ws = new XSockets.WebSocket("ws://joinaspot.com:4509/Broker");
+            ws.onopen = function (c) {
+
+                console.log("We are now connected to the Broker");
+
+                rtc = new XSockets.WebRTC(ws);
+
+                rtc.onpeerconnectioncreated = function (peer) {
+                    console.log("a rtcPeerConnection is created", peer);
+
+                };
+
+                rtc.onpeerconnectionlost = function (peer) {
+                    console.log("a rtcPeerConnection is lost", peer);
+                };
+
+                rtc.oncontextcreated = function (ctx) {
+                    console.log("The current client has its own context", ctx);
+                };
+                rtc.onlocalstream = function (stream) {
+                    attachMediaStream(document.querySelector("#local"), stream);
+                };
+
+                rtc.getUserMedia(rtc.userMediaConstraints.qvga(false), function () {
+                    console.log("Yeah, we got a localStream");
+
+                    console.log("Lets tell the broker to connect to the pre-defined (static) context", myCtx);
+                    rtc.changeContext(myCtx);
+                });
+
+                rtc.onremotestream = function (event) {
+                    console.log("We got a remotestream from one of the rtcPeerConnections, lets create a video element", event);
+                    var v = $("<video>").attr("autoplay", "autoplay").appendTo("#remote");
+                    attachMediaStream($(v).get(0), event.stream);
+                };
+            };
+
+        });
+    </script>
+
+</head>
+<body>
+    <h1>XSockets.NET WebRTC Example</h1>
+    <div id="remote"></div>
+    <span>More info @ xsockets.net</span>
+    <video id="local" autoplay></video>
+</body>
+</html>
