@@ -20,13 +20,9 @@ function trace(text) {
 }
 
 if (navigator.mozGetUserMedia) {
-    console.log("This appears to be Firefox");
-
     webrtcDetectedBrowser = "firefox";
-
     webrtcDetectedVersion =
              parseInt(navigator.userAgent.match(/Firefox\/([0-9]+)\./)[1], 10);
-
     // The RTCPeerConnection object.
     RTCPeerConnection = mozRTCPeerConnection;
 
@@ -75,13 +71,11 @@ if (navigator.mozGetUserMedia) {
 
     // Attach a media stream to an element.
     attachMediaStream = function (element, stream) {
-        console.log("Attaching media stream");
         element.mozSrcObject = stream;
         element.play();
     };
 
     reattachMediaStream = function (to, from) {
-        console.log("Reattaching media stream");
         to.mozSrcObject = from.mozSrcObject;
         to.play();
     };
@@ -95,8 +89,6 @@ if (navigator.mozGetUserMedia) {
         return [];
     };
 } else if (navigator.webkitGetUserMedia) {
-    console.log("This appears to be Chrome");
-
     webrtcDetectedBrowser = "chrome";
     webrtcDetectedVersion =
            parseInt(navigator.userAgent.match(/Chrom(e|ium)\/([0-9]+)\./)[2], 10);
@@ -160,13 +152,18 @@ XSockets.PeerContext = function (guid, context) {
     this.Context = context;
 };
 
-
+window.AudioContext = window.AudioContext || window.webkitAudioContext;
 XSockets.AudioAnalyser = (function () {
     function AudioAnalyser(stream, interval, cb) {
+
         var self = this;
         var buflen = 2048;
-        var buf = new Uint8Array(buflen);
+        var buffer = new Uint8Array(buflen);
+        
         function autoCorrelate(buf, sampleRate) {
+
+        
+            
             var minSamples = 4;
             var maxSamples = 1000;
             var size = 1000;
@@ -180,7 +177,9 @@ XSockets.AudioAnalyser = (function () {
                 var val = (buf[i] - 128) / 128;
                 rms += val * val;
             }
-            rms = Math.sqrt(rms / size);
+
+     
+            
             for (var offset = minSamples; offset <= maxSamples; offset++) {
                 var correlation = 0;
                 for (var i = 0; i < size; i++) {
@@ -192,24 +191,31 @@ XSockets.AudioAnalyser = (function () {
                     bestOffset = offset;
                 }
             }
+            rms = Math.sqrt(rms / size);
             if ((rms > 0.01) && (bestCorrelation > 0.01)) {
                 currentPitch = sampleRate / bestOffset;
                 var result = {
-                    Confidence: bestCorrelation,
-                    CurrentPitch: currentPitch,
-                    Fequency: sampleRate / bestOffset,
-                    RMS: rms,
-                    TimeStamp: new Date()
+                    confidence: bestCorrelation,
+                    currentPitch: currentPitch,
+                    fequency: sampleRate / bestOffset,
+                    rms: rms,
+                    timeStamp: new Date()
                 };
-                if (self.onResult)
-                    self.onResult(result);
-                self.analyzerResult.unshift(result);
+                if (self.onresult)
+                    self.onresult(result);
+                      self.analyzerResult.unshift(result);
+               
+
             }
+        
         }
         function pitcher() {
-            self.analyser.getByteTimeDomainData(buf);
-            autoCorrelate(buf, self.audioContext.sampleRate);
+            self.analyser.getByteTimeDomainData(buffer);
+            autoCorrelate(buffer, self.audioContext.sampleRate);
         }
+
+        var isEnabled = false;
+        
         this.analyzerResult = [];
         this.isSpeaking = false;
         this.onResult = undefined;
@@ -218,34 +224,57 @@ XSockets.AudioAnalyser = (function () {
         var mediaStreamSource = this.audioContext.createMediaStreamSource(stream);
         this.analyser = this.audioContext.createAnalyser();
 
-        mediaStreamSource.connect(this.analyser);
+      
         this.analyser.smoothingTimeConstant = 0.8;
         this.analyser.fftSize = 2048;
+        mediaStreamSource.connect(this.analyser);
+
+
+        this.byteFrequencyData = function () {
+          
+            var array = new Uint8Array(this.analyser.frequencyBinCount);
+            this.analyser.getByteFrequencyData(array);
+            return array;
+        };
+
+
+        this.enabled = function (state) {
+      
+            isEnabled = state || !isEnabled;
+        };
 
         window.setInterval(function () {
-            pitcher();
+          
+            if (isEnabled) {
+                pitcher();
+            
+            }
+               
         }, (interval || 1000) / 10);
 
         setInterval(function () {
+            if (isEnabled) {
+              
             if (self.analyzerResult.length > 5) {
                 // How old is the latest confident audio analyze?
                 var now = new Date();
                 var result = self.analyzerResult[0];
-                var lastKnown = new Date(self.analyzerResult[0].TimeStamp.getTime());
+                var lastKnown = new Date(self.analyzerResult[0].timeStamp.getTime());
                 if ((now - lastKnown) > 1000) {
                     if (self.isSpeaking) {
-                        result.IsSpeaking = false;
-                        if (self.onAnalysis) self.onAnalysis(result);
+                        result.isSpeaking = false;
+                        if (self.onanalysis) self.onanalysis(result);
                         self.analyzerResult = [];
                     }
                     self.isSpeaking = false;
                 } else {
                     if (!self.isSpeaking) {
-                        result.IsSpeaking = true;
-                        if (self.onAnalysis) self.onAnalysis(result);
+                        result.isSpeaking = true;
+                        if (self.onanalysis) self.onanalysis(result);
                     }
                     self.isSpeaking = true;
                 }
+            }
             }
         }, 250);
         if (cb) cb();
@@ -279,12 +308,7 @@ XSockets.WebRTC = function (ws, settings) {
         },
         sdpExpressions: []
     };
-
-
-
-
     var options = XSockets.Utils.extend(defaults, settings);;
-
 
     this.bind = function (event, fn, opts, callback) {
         subscriptions.add(event, fn);
@@ -359,12 +383,23 @@ XSockets.WebRTC = function (ws, settings) {
         ws.publish("changecontext", {
             context: contextGuid
         });
+        for (var peer in this.PeerConnections) {
+            this.PeerConnections[peer].Connection.close();
+            delete this.PeerConnections[peer];
+        }
         return this;
     };
 
-
-
-
+    this.connect = function () {
+        /// <summary>Connect to the context</summary>
+        for (var peer in this.PeerConnections) {
+          
+            this.PeerConnections[peer].Connection.close();
+            delete this.PeerConnections[peer];
+        }
+        ws.publish("connect");
+        return this;
+    };
     this.getLocalStreams = function () {
         /// <summary>Get local streams</summary>
         return localStreams;
@@ -509,7 +544,6 @@ XSockets.WebRTC = function (ws, settings) {
     };
 
     this.getUserMedia = function (constraints, success, error) {
-
         /// <summary>get a media stream</summary>
         /// <param name="userMediaSettings" type="Object">connstraints. i.e .usersdpConstraints.hd()</param>
         /// <param name="success" type="Object">callback function invoked when media stream captured</param>
@@ -548,7 +582,6 @@ XSockets.WebRTC = function (ws, settings) {
         /// <summary>Remove a Sockets.WebRTC.DataChannel </summary>
         /// <param name="name" type="Object">name of the XSockets.WebRTC.DataChannel to remove from offers</param>
         /// <param name="success" type="Object">callback function invoked when removed</param>
-
         if (this.DataChannels.hasOwnProperty(name)) {
             delete this.DataChannels[name];
             // remove delegates from peers..
@@ -563,51 +596,60 @@ XSockets.WebRTC = function (ws, settings) {
 
 
     // Private methods
+    
+
     var rtcPeerConnection = function (configuration, peerId) {
-       
         var that = this;
         this.PeerId = peerId;
         this.RTCDataChannels = {};
-        if (typeof (self.DataChannels) === "object" && configuration.sdpConstraints.optional.filter(function (option) { return option.RtpDataChannels; }).length === 0) {
-            configuration.sdpConstraints.optional.push({ RtpDataChannels: true });
+        var RTCDataChannelsRecieve = {};
+        if ((webrtcDetectedBrowser === 'chrome' && webrtcDetectedVersion <= 31) ||
+            webrtcDetectedBrowser === 'firefox') {
+            if (typeof (self.DataChannels) === "object") {
+                configuration.sdpConstraints.optional.push({ RtpDataChannels: true });
+            }
         }
-        this.Connection = new RTCPeerConnection({ iceServers: configuration.iceServers }, configuration.sdpConstraints);
+        this.Connection = new RTCPeerConnection({ iceServers: configuration.iceServers }, null);
         this.Connection.oniceconnectionstatechange = function (data) {
-            //   console.log("oniceconnectionstatechange", data);
+            //    console.log("oniceconnectionstatechange", data);
         };
         this.Connection.onnegotiationneeded = function (data) {
-            // console.log("onnegotiationneeded", data);
+            //    console.log("onnegotiationneeded", data);
         };
         this.Connection.onremovestream = function (data) {
-            //console.log("onremovestream", data);
+            //    console.log("onremovestream", data);
         };
         this.Connection.onsignalingstatechange = function (data) {
-            //console.log("onsignalingstatechange", data);
+            //   console.log("onsignalingstatechange", data);
         };
         // If there is dataChannels attach, offer em
         for (var dc in self.DataChannels) {
             var dataChannel = self.DataChannels[dc];
-            this.RTCDataChannels[dataChannel.name] = this.Connection.createDataChannel(dataChannel.name, { reliable: false });
-            this.RTCDataChannels[dataChannel.name].onmessage = function (data) {
-                var obj = JSON.parse(data.data).JSON;
-                dataChannel.subscriptions.fire(obj.event, { peerId: that.PeerId, message: JSON.parse(obj.data) }, function () { });
-            };
-            this.RTCDataChannels[dataChannel.name].onopen = function (event) {
-                //console.log("dataChannel open ", dataChannel.name, data);
-                if (dataChannel.onopen) dataChannel.onopen(that.PeerId, event);
-            };
-            this.RTCDataChannels[dataChannel.name].closed = function (event) {
-                if (dataChannel.onclose) dataChannel.onclose(that.PeerId, event);
+            this.RTCDataChannels[dataChannel.name] = this.Connection.createDataChannel(dataChannel.name, configuration.dataChannelConstraints);
+            this.Connection.ondatachannel = function (event) {
+                var receiveChannel = event.channel;
+                receiveChannel.onmessage = function (data) {
+                    var obj = JSON.parse(data.data).JSON;
+                    dataChannel.subscriptions.fire(obj.event, { peerId: that.PeerId, message: JSON.parse(obj.data) }, function () { });
+                };
+                receiveChannel.onopen = function (event) {
+                    if (dataChannel.onopen) dataChannel.onopen(that.PeerId, event.target);
+                };
+                receiveChannel.onclose = function (event) {
+                    if (dataChannel.onclose) dataChannel.onclose(that.PeerId, event.target);
+                };
+                RTCDataChannelsRecieve[event.label] = event.channel;
             };
             dataChannel.onpublish = function (topic, data) {
                 var message = new XSockets.Message(topic, data);
                 for (var p in self.PeerConnections) {
+                    if(self.PeerConnections[p].RTCDataChannels[dataChannel.name].readyState === "open")
                     self.PeerConnections[p].RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
                 }
             };
-            dataChannel.onpublishTo = function (peerId,topic, data) {
+            dataChannel.onpublishTo = function (peerId, topic, data) {
                 var message = new XSockets.Message(topic, data);
-                if(self.PeerConnections[peerId])
+                if (self.PeerConnections[peerId])
                     self.PeerConnections[peerId].RTCDataChannels[dataChannel.name].send(JSON.stringify(message));
             };
         }
@@ -634,6 +676,8 @@ XSockets.WebRTC = function (ws, settings) {
         };
         self.dispatch(XSockets.WebRTC.Events.onPeerConnectionCreated, { PeerId: that.PeerId });
     };
+
+
     var createOffer = function (peer) {
         if (!peer) return;
 
@@ -710,7 +754,7 @@ XSockets.WebRTC = function (ws, settings) {
         self.CurrentContext = new XSockets.PeerContext(context.PeerId, context.Context);
         self.dispatch(XSockets.WebRTC.Events.onContextCreated, context);
     }, function () {
-        ws.publish('GetContext');
+        ws.publish('getContext');
     });
     ws.subscribe("contextsignal", function (signal) {
         var msg = JSON.parse(signal.Message);

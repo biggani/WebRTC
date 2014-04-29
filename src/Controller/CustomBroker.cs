@@ -23,7 +23,6 @@ namespace WebRTCSample.Controller
         /// </summary>
         [NoEvent]
         public List<IPeerConnection> Connections { get; set; }
-
         /// <summary>
         /// The Peer for this client
         /// </summary>
@@ -56,18 +55,27 @@ namespace WebRTCSample.Controller
         /// <param name="onClientConnectArgs"></param>
         private void _OnOpen(object sender, OnClientConnectArgs onClientConnectArgs)
         {
+            
             Peer = new PeerConnection
             {
-                Context = Guid.NewGuid(),
+                Context = this.ProtocolInstance.Parameters.ContainsKey("ctx") ? Guid.Parse(this.ProtocolInstance.Parameters["ctx"]) : Guid.NewGuid(),
                 PeerId = ClientGuid
-            };            
+            };              
         }
-
+        /// <summary>
+        /// Connect to the current context
+        /// </summary>
+        public void Connect()
+        {
+            this.ConnectToContext();
+        }
+        /// <summary>
+        /// Get the current context
+        /// </summary>
         public void GetContext()
         {
             this.Send(Peer, Events.Context.Created);
         }
-
         /// <summary>
         /// When a client disconnects tell the other clients about the Peer being lost
         /// </summary>
@@ -83,7 +91,14 @@ namespace WebRTCSample.Controller
             if (Peer == null) return;
             this.SendTo(f => f.Peer.Context.Equals(Peer.Context), Peer, Events.Peer.Lost);
         }
-        
+
+
+        private void NotifyPeerLost(Guid context)
+        {
+            if (Peer == null) return;
+            this.SendTo(f => f.Peer.Context.Equals(context), Peer, Events.Peer.Lost);
+        }
+
         #endregion
 
         #region Overrides from XSocketController
@@ -116,9 +131,8 @@ namespace WebRTCSample.Controller
         /// </summary>
         public void LeaveContext()
         {
-            this.NotifyPeerLost();
-            
-            this.Peer.Context = new Guid();
+            this.NotifyPeerLost(this.Peer.Context);
+            this.Peer.Context = Guid.NewGuid();
             this.Send(Peer, Events.Context.Created);
         }
         /// <summary>
